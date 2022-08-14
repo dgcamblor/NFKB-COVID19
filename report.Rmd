@@ -1,0 +1,730 @@
+---
+title: "Genetic variants in *NFKB1*, *NFKBIA*, *NFKBIZ* and risk of critical outcome among COVID-19 patients"
+subtitle: "A genetic association study in R"
+author: "Daniel González Camblor"
+output: 
+ html_document:
+    css: "css/style.css"
+    number_sections: true
+    toc: true
+    toc_float:
+      collapsed: false
+    df_print: kable
+    includes:
+      in_header: "html/head.html"
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, fig.align="center")
+```
+
+<br>
+
+This script follows the steps necessary to reproduce the main results in [Camblor et al., 2022](https://doi.org/10.1016/j.humimm.2022.06.002). Mentions to Tables and Figures refer to those of this work.
+
+# Libraries {-}
+
+```{r}
+library(readxl)
+library(tidyverse)
+library(HardyWeinberg)
+library(epitools)
+library(ggsignif)
+library(plotly)
+```
+
+# Data loading and processing
+
+Our study focused on COVID-19 patients admitted to ICU. The data regarding their characterization, clinical variables and genotypes were collected in an Excel file, which can be loaded in R with:
+
+```{r}
+all <- read_excel("patients_data.xlsx")
+```
+
+For this analysis, we want to extract the main clinical and genetic covariables that are in our interest:
+
+```{r}
+data <- all %>% 
+  select(EXITUS, AGE, SEX, HTN, DM, HLP, IL6_gt70, DD_gt2000, NFKB1, NFKBIA, NFKBIZ) %>% 
+  mutate_if(is.character, as.factor)
+```
+
+With each of the variables standing for:
+
+-   **EXITUS:** expresses whether the patient has died or not.
+-   **AGE:** self-explanatory.
+-   **SEX:** self-explanatory (male/female distinction).
+-   **HTN:** determines if the patient has hypertension or not.
+-   **DM:** determines if the patient has Diabetes Mellitus or not.
+-   **HLP:** determines if the patient has hyperlipidemia or not.
+-   **IL6_gt70:** in relation to the patient's levels of IL-6 (a marker for inflammation and severe COVID-19), indicates whether they are superior to 70 pg/mL (a cutoff associated to higher risk of death in COVID-19) or not.
+-   **DD_gt2000:** in relation to the patient's levels of D-Dimer (a marker for fibrinolysis), indicates whether they are superior to 2000 ng/mL (a cutoff associated to higher risk of death in COVID-19) or not.
+-   ***NFKB1:*** genotype of the candidate variant [rs28362491](https://www.ncbi.nlm.nih.gov/snp/rs28362491) (indel) for the *NFKB1* gene. Common allele: I, insertion. Rare allele: D, deletion.
+-   ***NFKBIA:*** genotype of the candidate variant [rs696](https://www.ncbi.nlm.nih.gov/snp/rs696) (G>A) for the *NFKBIA* gene. Common allele: G. Rare allele: A.
+-   ***NFKBIZ:*** genotype of the candidate variant [rs3217713](https://www.ncbi.nlm.nih.gov/snp/rs3217713) (indel) for the *NFKBIZ* gene. Common allele: I, insertion. Rare allele: D, deletion.
+
+As part of this study, 300 controls were also genotyped for their comparison with the ICU COVID-19 patients. These data were also stored in an Excel file:
+
+```{r}
+control_data <- read_excel("controls_data.xlsx")
+```
+
+Before the analysis, we can declare some variables to act as global definitions:
+
+```{r}
+STUDY_GROUPS <- c("Survivors", "Deceased", "Patients", "Controls")
+# Survivors and Deceased refer to ICU patients (EXITUS = NO/YES)
+# Patients are the total of the ICU individuals
+
+CLIN_VAR <- colnames(data)[!colnames(data) %in% c("EXITUS", "NFKB1", "NFKBIA", "NFKBIZ")]
+CAT_CLIN_VAR <- CLIN_VAR[-which(CLIN_VAR=="AGE")]  # Categorical clinical variables
+
+GENES <- c("NFKB1", "NFKBIA", "NFKBIZ")
+
+SIG_LVL <- 0.05
+```
+
+# Data description {.tabset}
+
+We can inspect our data at a glance with:
+
+```{r}
+summary(data)
+```
+
+The total number of COVID-19 ICU patients we are studying is 470. We can highlight a median age of 65 and the predominance of males in the ICU (both age and male sex are risk factors for severe COVID-19). Indeed, the distribution of ages is highly left-skewed:
+
+```{r}
+ggplot(data, aes(x=AGE)) +
+  geom_histogram(aes(y = ..density..), color="black", fill="white") +
+  geom_density(color="red", alpha=0.1, fill="red") +
+  labs(x="Age", y="Density") +
+  theme_bw()
+```
+
+Indicating, as expected, that COVID-19 ICU patients tend to be of higher ages.
+
+NA values arise for some of the clinical variables (DM, HLP, IL6_gt70, DD_gt2000), as they were not measured in all the patients. We put our focus on explaining the variable EXITUS —representing the COVID-19 severity— as a function of the rest of the variables.
+
+In [Table 1](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#t0005) we show the frequencies in each of the study groups (EXITUS = YES/NO), which can be obtained with the following code. The frequencies can be computed with:
+
+```{r}
+clin_freqs <- list()
+
+for (var in CAT_CLIN_VAR) {
+  clin_freqs[["absolute"]][[var]] <- table(data[[var]], data$EXITUS)
+  clin_freqs[["relative"]][[var]] <- apply(clin_freqs[["absolute"]][[var]], 2, function(x){x/sum(x)})
+}
+```
+
+Accessing individual values in the console with:
+
+```{r}
+clin_freqs$relative$SEX
+```
+
+Which leaves us with the following summaries, included in [Table 1](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#t0005):
+
+## Absolute {.unlisted .unnumbered}
+
+```{r}
+risk_groups <- lapply(clin_freqs$absolute, function(x){x[2,]})  # Extract the group of risk
+abs_freq_summary <- do.call(rbind.data.frame, risk_groups)  # Join data in a df
+colnames(abs_freq_summary) <- STUDY_GROUPS[1:2]
+rownames(abs_freq_summary) <- c("SEX (MALE)", CAT_CLIN_VAR[-which(CAT_CLIN_VAR=="SEX")])
+abs_freq_summary
+```
+
+## Relative {.unlisted .unnumbered}
+
+```{r}
+risk_groups <- lapply(clin_freqs$relative, function(x){x[2,]})  # Extract the group of risk
+rel_freq_summary <- do.call(rbind.data.frame, risk_groups)  # Join data in a df
+colnames(rel_freq_summary) <- STUDY_GROUPS[1:2]
+rownames(rel_freq_summary) <- c("SEX (MALE)", CAT_CLIN_VAR[-which(CAT_CLIN_VAR=="SEX")])
+rel_freq_summary
+```
+
+# {.unlisted .unnumbered}
+
+Finally, the mean ages ± standard deviation in the study groups (also included in [Table 1](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#t0005)) are:
+
+```{r}
+data %>% 
+  group_by(EXITUS) %>% 
+  summarize(Mean=mean(AGE), SD=sd(AGE))
+```
+
+# Clinical variable associations
+
+In order to explore the relationship between the clinical variables and EXITUS in our data, we performed a univariate logistic regression for each of them as independent variables, placing EXITUS as the dependent variable.
+
+Each of the logistic regressions can be gathered in a single list with:
+
+```{r}
+exitus_clinical_lrs <- list()
+
+for (var in CLIN_VAR) {
+  exitus_clinical_lrs[[var]] <- glm(data$EXITUS ~ data[[var]], family="binomial")
+}
+```
+
+Accessing the elements in the console, specially for a summary, with:
+
+```{r}
+summary(exitus_clinical_lrs[["SEX"]])
+```
+
+A summary table of the logistic regression results, which was incorporated in [Table 1](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#t0005) of the study, was made using the following code:
+
+```{r}
+glm_table <- data.frame("p-value"=numeric(0), "OR"=numeric(0), "Upper_95CI"=numeric(0), "Lower_95CI"=numeric(0))
+
+for (var in CLIN_VAR) {
+  fit <- glm(data$EXITUS ~ data[[var]], family="binomial")
+  
+  p <- summary(fit)$coefficients[2,4]
+  or <- exp(coef(fit))[2]
+  ub <- exp(confint(fit))[2,1]
+  lb <- exp(confint(fit))[2,2]
+  
+  glm_table[var,] <- c(p, or, ub, lb)
+}
+
+glm_table
+```
+
+In the case of the age, a logistic regression answers a different question than what we are interested in: to test the differences in means. The Shapiro-Wilk test is convincing in the lack of normality in the AGE data, but a t-test can still be performed as per the Central Limit Theorem, which considers the approximation of sample means to normality in large samples (in this case, we have groups of N=371 and N=99).
+
+```{r}
+t.test(data$AGE ~ data$EXITUS)  # Welch approximation (variances unequal)
+```
+
+A very low p-value (<< `r SIG_LVL`) makes certain a difference in the mean ages: deceased COVID-19 patients at the ICU are of an older age.
+
+# Genetic association study
+
+## Obtaining the genotype and allele frequencies {.tabset}
+
+In order to extract the genotype and allele frequencies —both absolute and relative— from the study data, the `variant_freqs` function was written.
+
+<details>
+  <summary>Show function code</summary>
+```{r}
+#' Variant frequencies
+#' 
+#' Compute the genetic (genotype and allele) frequencies for variant genotype observations stored 
+#' in a vector
+#' 
+#' @param variant A chr vector of genotypes
+#' @param group A grouping vector for the genotypes (optional)
+#' @param margin How the relative frequencies will be computed with grouping variables: 
+#' 2, genotype proportions for each group; 1, distribution among groups for each genotype
+#' 
+#' @return A list with both absolute and relative frequencies for genotypes and alleles 
+
+variant_freqs <- function(variant, group=NULL, margin=2) {
+  frequencies <- list()  
+  
+  if (is.null(group)) {margin=2}  # Force margin 2 if only the genotypes are provided
+  
+  # Compute the frequencies for the genotypes. To simplify the code, it will be working with 
+  # matrices: if the input of the user is only a variant, create a temporary column = c(1, 1, 1)
+  if (is.null(group)) {frequencies$genotype_abs <- cbind(table(variant), c(1, 1, 1))}
+  else {frequencies$genotype_abs <- table(variant, group)}
+  frequencies$genotype_rel <- apply(frequencies$genotype_abs, margin, function(x){x/sum(x)})
+  
+  # Compute the frequencies for the alleles: 2 * homozygote count + heterozygote count
+  first_allele_freq <- frequencies$genotype_abs[3,] * 2 + frequencies$genotype_abs[2,]
+  second_allele_freq <- frequencies$genotype_abs[1,] * 2 + frequencies$genotype_abs[2,]
+  frequencies$allele_abs <- rbind(first_allele_freq, second_allele_freq)
+  rownames(frequencies$allele_abs) <- c(substr(rownames(frequencies$genotype_abs)[3], 1, 1),
+                                        substr(rownames(frequencies$genotype_abs)[1], 1, 1))
+  frequencies$allele_rel <- apply(frequencies$allele_abs, margin, function(x){x/sum(x)})
+  
+  # If no group was provided, remove the temporary column
+  if (is.null(group)) {frequencies <- lapply(frequencies, function(x){x[,1]})}
+  
+  return(frequencies)
+}
+```
+</details>
+
+Being able to compute the frequencies among the ICU patients with:
+
+```{r}
+NFKB1 <- variant_freqs(data$NFKB1, data$EXITUS)
+NFKBIA <- variant_freqs(data$NFKBIA, data$EXITUS)
+NFKBIZ <- variant_freqs(data$NFKBIZ, data$EXITUS)
+```
+
+The total frequencies for the ICU patients are computed with:
+
+```{r}
+NFKB1_ICU <- variant_freqs(data$NFKB1)
+NFKBIA_ICU <- variant_freqs(data$NFKBIA)
+NFKBIZ_ICU <- variant_freqs(data$NFKBIZ)
+```
+
+And finally, the frequencies for the controls are:
+
+```{r}
+NFKB1_controls <- variant_freqs(control_data$NFKB1)
+NFKBIA_controls <- variant_freqs(control_data$NFKBIA)
+NFKBIZ_controls <- variant_freqs(control_data$NFKBIZ)
+```
+
+This leaves us with the following frequency summaries, which were used for [Table 3](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#t0015):
+
+### *NFKB1* {.unlisted .unnumbered}
+
+The absolute frequencies for rs28362491 are:
+
+```{r}
+NFKB1_abs <- as.data.frame(
+  rbind(cbind(t(NFKB1$genotype_abs), t(NFKB1$allele_abs)),
+        c(NFKB1_ICU$genotype_abs, NFKB1_ICU$allele_abs),
+        c(NFKB1_controls$genotype_abs, NFKB1_controls$allele_abs))
+)
+rownames(NFKB1_abs) <- STUDY_GROUPS; NFKB1_abs
+```
+
+The relative frequencies are:
+
+```{r}
+NFKB1_rel <- as.data.frame(
+  rbind(cbind(t(NFKB1$genotype_rel), t(NFKB1$allele_rel)),
+      c(NFKB1_ICU$genotype_rel, NFKB1_ICU$allele_rel),
+      c(NFKB1_controls$genotype_rel, NFKB1_controls$allele_rel))
+)
+rownames(NFKB1_rel) <- STUDY_GROUPS; round(NFKB1_rel, 2)
+```
+
+### *NFKBIA* {.unlisted .unnumbered}
+
+The absolute frequencies for rs696 are:
+
+```{r}
+NFKBIA_abs <- as.data.frame(
+  rbind(cbind(t(NFKBIA$genotype_abs), t(NFKBIA$allele_abs)),
+      c(NFKBIA_ICU$genotype_abs, NFKBIA_ICU$allele_abs),
+      c(NFKBIA_controls$genotype_abs, NFKBIA_controls$allele_abs))
+)
+rownames(NFKBIA_abs) <- STUDY_GROUPS; NFKBIA_abs
+```
+
+The relative frequencies are:
+
+```{r}
+NFKBIA_rel <- as.data.frame(
+  rbind(cbind(t(NFKBIA$genotype_rel), t(NFKBIA$allele_rel)),
+      c(NFKBIA_ICU$genotype_rel, NFKBIA_ICU$allele_rel),
+      c(NFKBIA_controls$genotype_rel, NFKBIA_controls$allele_rel))
+)
+rownames(NFKBIA_rel) <- STUDY_GROUPS; round(NFKBIA_rel, 2)
+```
+
+### *NFKBIZ* {.unlisted .unnumbered}
+
+The absolute frequencies for rs3217713 are:
+
+```{r}
+NFKBIZ_abs <- as.data.frame(
+  rbind(cbind(t(NFKBIZ$genotype_abs), t(NFKBIZ$allele_abs)),
+      c(NFKBIZ_ICU$genotype_abs, NFKBIZ_ICU$allele_abs),
+      c(NFKBIZ_controls$genotype_abs, NFKBIZ_controls$allele_abs))
+)
+rownames(NFKBIZ_abs) <- STUDY_GROUPS; NFKBIZ_abs
+```
+
+The relative frequencies are:
+
+```{r}
+NFKBIZ_rel <- as.data.frame(
+  rbind(cbind(t(NFKBIZ$genotype_rel), t(NFKBIZ$allele_rel)),
+      c(NFKBIZ_ICU$genotype_rel, NFKBIZ_ICU$allele_rel),
+      c(NFKBIZ_controls$genotype_rel, NFKBIZ_controls$allele_rel))
+)
+rownames(NFKBIZ_rel) <- STUDY_GROUPS; round(NFKBIZ_rel, 2)
+```
+
+## Hardy-Weinberg Equilibrium testing
+
+Hardy-Weinberg Equilibrium (HWE) testing is commonly used in genetic association studies as a quality control, as departure from its criteria indicates an underlying unwanted variation that may lead to problems in the interpretation of the results.
+
+The testing is performed for each set of genotype frequencies by means of a Chi-squared test against the expected frequencies that would result of meeting the HWE criteria. We can obtain a simple summary of p-values with:
+
+```{r}
+# The get() function is used to translate the strings in GENES to variable names
+for (gene in GENES) {
+  print(paste("-----", gene, "----"))
+  cat("Survivors:\n  ")
+  print(
+    HWChisq(get(gene)$genotype_abs[,"NO"], verbose=FALSE)$pval
+  )
+  cat("Deceased:\n  ")
+  print(
+    HWChisq(get(gene)$genotype_abs[,"YES"], verbose=FALSE)$pval
+  )
+  cat("ICU:\n  ")
+  print(
+    HWChisq(get(paste0(gene, "_ICU"))$genotype_abs, verbose=FALSE)$pval
+  )
+  cat("Controls:\n  ")
+  print(
+    HWChisq(get(paste0(gene, "_controls"))$genotype_abs, verbose=FALSE)$pval
+  )
+  cat("\n")
+}
+```
+
+With all the genotypes meeting the HWE criteria (p-value > `r SIG_LVL`), we can now proceed to the proper genetic association analysis.
+
+## Genotype frequencies association to EXITUS {#genotype-exitus .tabset}
+
+In this section we'll perform the association (Chi-squared) tests between the genotype frequencies and the EXITUS variable, outputting some of the results placed in [Table 3](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#t0015). 
+
+### Deceased vs. survivors {.unlisted .unnumbered}
+
+We will begin analyzing the deceased vs. survivors data (again, COVID-19 patients in the ICU). A preliminary Chi-squared test can be performed for the genotypes in each of the three polymorphisms with:
+
+```{r}
+chisq_NFKB1 <- chisq.test(NFKB1$genotype_abs); chisq_NFKB1
+chisq_NFKBIA <- chisq.test(NFKBIA$genotype_abs); chisq_NFKBIA
+chisq_NFKBIZ <- chisq.test(NFKBIZ$genotype_abs); chisq_NFKBIZ
+```
+
+Observing a trend towards significance in the *NFKBIZ* rs3217713 genotypes. Exploring the deviation in the observed values from the expected values in each case, we can group genotypes based on similar trends to further improve the statistical power in the tests to follow. This way:
+
+```{r}
+chisq_NFKB1$observed-chisq_NFKB1$expected
+```
+
+For the *NFKB1* rs28362491 genotypes, heterozygotes are more frequent in deceased patients vs. survivors: ID / II+DD. However, the interpretation of a heterozygote effect is harder to elucidate, so we chose to group ID heterozygotes to the homozygote group with the nearest value of change; i.e: **ID+DD / II**.
+
+```{r}
+chisq_NFKBIA$observed-chisq_NFKBIA$expected
+```
+
+For the *NFKBIA* rs696 genotypes, GG homozygosis is more frequent in deceased patients vs. survivors: **GG / GA+AA**.
+
+```{r}
+chisq_NFKBIZ$observed-chisq_NFKBIZ$expected
+```
+
+Finally, for the *NFKBIZ* rs3217713 genotypes, the II homozygosis is more frequent in deceased patients vs. survivors: **II / ID+DD**.
+
+As we will be working with them later, these groups can be reflected in the data with:
+
+```{r}
+data <- data %>% 
+  mutate(NFKB1_GROUP = ifelse(NFKB1=="II", "II", "ID+DD")) %>% 
+  mutate(NFKBIA_GROUP = ifelse(NFKBIA=="GG", "GG", "GA+AA")) %>% 
+  mutate(NFKBIZ_GROUP = ifelse(NFKBIZ=="II", "II", "ID+DD"))
+```
+
+Finally, we will be executing the new Chi-squared tests. The default Yates' correction for continuity will not be considered, as no expected values < 5 were found (and as it is regarded by some authors as too conservative). The final genotype association tests were:
+
+```{r}
+chisq.test(data$EXITUS, data$NFKB1_GROUP, correct=FALSE)
+chisq.test(data$EXITUS, data$NFKBIA_GROUP, correct=FALSE)
+chisq.test(data$EXITUS, data$NFKBIZ_GROUP, correct=FALSE)  # Significant
+```
+
+Where we then found a significant association of the *NFKBIZ* rs3217713 II genotype to mortality (frequency raised in deceased patients, as previously stated). The odds ratios can be computed with:
+
+```{r}
+oddsratio.wald(t(table(data$EXITUS, data$NFKB1_GROUP)), rev="r")$measure
+oddsratio.wald(t(table(data$EXITUS, data$NFKBIA_GROUP)))$measure
+oddsratio.wald(t(table(data$EXITUS, data$NFKBIZ_GROUP)))$measure
+```
+
+<div class="scroll-back">[⇈ [Scroll back to the start of the section](#genotype-exitus) ⇈]</div>
+
+### Patients vs. controls {.unlisted .unnumbered}
+
+We can now perform the analyses to compare the genotype frequencies in the total of the ICU patients (deceased + survivors) against our controls.
+
+First, we establish the comparison matrices with the absolute frequencies previously gathered:
+
+```{r}
+NFKB1_genotype_matrix <- cbind(NFKB1_ICU$genotype_abs, NFKB1_controls$genotype_abs)
+colnames(NFKB1_genotype_matrix) <- STUDY_GROUPS[3:4]
+NFKBIA_genotype_matrix <- cbind(NFKBIA_ICU$genotype_abs, NFKBIA_controls$genotype_abs)
+colnames(NFKBIA_genotype_matrix) <- STUDY_GROUPS[3:4]
+NFKBIZ_genotype_matrix <- cbind(NFKBIZ_ICU$genotype_abs, NFKBIZ_controls$genotype_abs)
+colnames(NFKBIZ_genotype_matrix) <- STUDY_GROUPS[3:4]
+```
+
+We perform an initial set of Chi-squared tests:
+
+```{r}
+chisq_NFKB1_pvc <- chisq.test(NFKB1_genotype_matrix); chisq_NFKB1_pvc
+chisq_NFKBIA_pvc <- chisq.test(NFKBIA_genotype_matrix); chisq_NFKBIA_pvc
+chisq_NFKBIZ_pvc <- chisq.test(NFKBIZ_genotype_matrix); chisq_NFKBIZ_pvc
+```
+
+We assess which genotypes can be grouped based on equivalent changes among groups:
+
+```{r}
+chisq_NFKB1_pvc$observed-chisq_NFKB1_pvc$expected  # DD / II+ID (to avoid testing heterozygosis vs. homozygosis)
+chisq_NFKBIA_pvc$observed-chisq_NFKBIA_pvc$expected  # GG / GA+AA
+chisq_NFKBIZ_pvc$observed-chisq_NFKBIZ_pvc$expected  # ID+DD / II
+```
+
+We establish the groups:
+
+```{r}
+grouped_NFKB1_genotype_matrix <- rbind(NFKB1_genotype_matrix["DD",],
+                                       NFKB1_genotype_matrix["ID",] + NFKB1_genotype_matrix["II",])
+grouped_NFKBIA_genotype_matrix <- rbind(NFKBIA_genotype_matrix["GG",],
+                                        NFKBIA_genotype_matrix["GA",] + NFKBIA_genotype_matrix["AA",])
+grouped_NFKBZ_genotype_matrix <- rbind(NFKBIZ_genotype_matrix["ID",] + NFKBIZ_genotype_matrix["DD",],
+                                       NFKBIZ_genotype_matrix["II",])
+```
+
+The final genotype association tests were:
+
+```{r}
+chisq.test(grouped_NFKB1_genotype_matrix, correct=FALSE)
+chisq.test(grouped_NFKBIA_genotype_matrix, correct=FALSE)  # Significant
+chisq.test(grouped_NFKBZ_genotype_matrix, correct=FALSE)
+```
+
+Where we find that, although not conclusively, the p-value for *NFKBIA* < `r SIG_LVL` states a significant deviation in the genotype frequencies of the rs696 polymorphism in ICU patients vs. controls: GG is higher in the patients. Finally, we compute the odds ratios:
+
+```{r}
+oddsratio.wald(grouped_NFKB1_genotype_matrix)$measure
+oddsratio.wald(grouped_NFKBIA_genotype_matrix)$measure
+oddsratio.wald(grouped_NFKBZ_genotype_matrix)$measure
+```
+
+<div class="scroll-back">[⇈ [Scroll back to the start of the section](#genotype-exitus) ⇈]</div>
+
+## Allele frequencies association to EXITUS {.tabset}
+
+Here, we will perform the equivalent calculations for the allele frequencies, completing the results of [Table 3](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#t0015).
+
+### Deceased vs. survivors {.unlisted .unnumbered}
+
+We will be working with the two groups of ICU patients. The Chi-squared tests are directly performed with:
+
+```{r}
+chisq.test(NFKB1$allele_abs, correct=FALSE)
+chisq.test(NFKBIA$allele_abs, correct=FALSE)
+chisq.test(NFKBIZ$allele_abs, correct=FALSE)  # Significant
+```
+
+And then, the odds ratios are computed with:
+
+```{r}
+oddsratio.wald(NFKB1$allele_abs)$measure
+oddsratio.wald(NFKBIA$allele_abs, rev="r")$measure
+oddsratio.wald(NFKBIZ$allele_abs, rev="r")$measure
+```
+
+### Patients vs. controls {.unlisted .unnumbered}
+
+Now, we are comparing the total of ICU patients against the controls. We establish the matrices, joining the patients and controls data:
+
+```{r}
+NFKB1_allele_matrix <- rbind(NFKB1_ICU$allele_abs, NFKB1_controls$allele_abs)
+NFKBIA_allele_matrix <- rbind(NFKBIA_ICU$allele_abs, NFKBIA_controls$allele_abs)
+NFKBIZ_allele_matrix <- rbind(NFKBIZ_ICU$allele_abs, NFKBIZ_controls$allele_abs)
+```
+
+The Chi-squared tests are performed with:
+
+```{r}
+chisq.test(NFKB1_allele_matrix, correct=FALSE)
+chisq.test(NFKBIA_allele_matrix, correct=FALSE)  # Significant
+chisq.test(NFKBIZ_allele_matrix, correct=FALSE)
+```
+
+And then, the odds ratios are computed with:
+
+```{r}
+oddsratio.wald(NFKB1_allele_matrix, rev="r")$measure
+oddsratio.wald(NFKBIA_allele_matrix)$measure
+oddsratio.wald(NFKBIZ_allele_matrix, rev="r")$measure
+```
+
+## Association of genotypes to clinical variables
+
+To end the association study, we would be interested to test whether the genotypes of the three variants are associated to the clinical variables or not. The frequencies for each genotype were determined using the `variant_freqs` function, specifying the clinical variables as grouping variables instead of EXITUS; e.g.:
+
+```{r}
+variant_freqs(data$NFKB1, data$SEX, 1)
+# We use margin=1 to compare relative frequencies inside grouping variables
+```
+
+To explore the relationships between the variants and the clinical variables, we worked with the genotype groups previously established. A list of all the tests of interest was created with:
+
+```{r}
+genotype_groups <- c("NFKB1_GROUP", "NFKBIA_GROUP", "NFKBIZ_GROUP")
+
+genotypes_clin_associations <- list()
+
+for (genotypes in genotype_groups) {
+  for (var in CAT_CLIN_VAR) {
+    genotypes_clin_associations[[genotypes]][[var]] <- chisq.test(data[[genotypes]], data[[var]], correct=FALSE)
+  }
+}
+```
+
+Accessing individual tests in the console with: 
+
+```{r}
+genotypes_clin_associations$NFKB1_GROUP$SEX
+```
+
+Differences in age among groups were tested with:
+
+```{r eval=FALSE}
+for (group in genotype_groups) {
+  print(t.test(data$AGE ~ data[[group]]))
+}
+```
+
+These results were collected for *NFKB1*, *NFKBIA* and *NFKBIZ* separately in the [Supplementary Tables](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#s0075) 1A, 1B and 1C, respectively.
+
+The main finding was a significant association of the *NFKBIZ* rs3217713 polymorphism to values of D-Dimer above 2000 ng/mL, as seen in:
+
+```{r}
+genotypes_clin_associations$NFKBIZ_GROUP$DD_gt2000
+```
+
+We can determine the nature of this association examining the residuals:
+
+```{r}
+genotypes_clin_associations$NFKBIZ_GROUP$DD_gt2000$residuals
+```
+
+Finding that the II genotype is found more frequently than it could be expected in patients with D-Dimer above 2000 ng/mL.
+
+The odds ratio was computed with:
+
+```{r}
+fit <- glm(data$DD_gt2000 ~ data$NFKBIZ_GROUP, family="binomial")
+exp(cbind(coef(fit), confint(fit)))
+```
+
+## Creating Figure 1
+
+The information we are going to represent is the proportion of patients with each *NFKBIZ* rs3217713 genotype that have D-Dimer levels above 2000 ng/mL, being the association of the II polymorphism to high D-Dimer levels a major finding in our study. The frequencies we are representing are:
+
+```{r}
+freqs <- variant_freqs(data$NFKBIZ, data$DD_gt2000, 1)$genotype_rel
+freqs <- t(freqs); freqs
+```
+
+Specifically, we are interested in those of the "YES" group (D-Dimer levels above 2000 ng/mL).
+
+With them, we can now elaborate the plot that corresponds to [Figure 1](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#f0005):
+
+```{r}
+freqs <- as.data.frame(freqs) %>% 
+  rownames_to_column("GENOTYPE") %>% 
+  pivot_longer(cols=-GENOTYPE, names_to="DD_gt2000", values_to="FREQUENCY") %>%
+  mutate_if(is.character, as.factor)
+```
+
+```{r}
+figure_1 <- freqs %>% 
+  filter(DD_gt2000=="YES") %>% 
+  ggplot(aes(x=fct_rev(GENOTYPE), y=FREQUENCY, fill=GENOTYPE)) +
+  geom_bar(stat="identity", show.legend=FALSE, color="black", size=1.5) +
+  geom_text(aes(label=round(FREQUENCY, 2)), vjust=-0.80, size=7.5) +
+  ylim(0, 0.45) +
+  scale_fill_manual(values=c("#f8e5f8", "#f8e5f8", "#e699e0")) +
+  labs(x=element_blank(), y="D-dimer > 2000 ng/mL proportion") +
+  geom_signif(comparisons = list(c("II","DD")), y_position = 0.35,
+              tip_length = 0, vjust = -1, size=1, annotations = "II vs. ID+DD: p = 0.0078", textsize = 7) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(hjust = 0.5, margin=margin(b=20), face="bold", size=20),
+    axis.title.y = element_text(face="bold", size=20, margin=margin(r=20)),
+    axis.text.x = element_text(face="bold", size=17),
+    axis.text.y = element_text(face="bold", size=17),
+    strip.text.x = element_text(face="bold")) +
+  theme(plot.margin = unit(c(0.3,0.2,0.2,0.2), "cm"))
+
+figure_1
+```
+
+# Expression study
+
+To explore a functional role of the *NFKBIZ* rs3217713 variant, we performed an expression study of the *NFKBIZ* transcript in the blood of some of the patients in our cohort (N = 52). Expression was determined in Ct values —the number of qPCR cycles needed to cross a threshold of significant fluorescent signal—, which are inversely proportional to the amount of transcript of the gene. The Ct value for each patient was measured in triplicate, computing the correspondent mean for each of them. The expression of the *ACTB* gene in Ct values was also determined; as it is a housekeeping gene with constant expression, it allows us to normalize the Ct values of the *NFKBIZ* gene to account for experimental variability. This can be done by dividing the Ct value of *NFKBIZ* by the Ct value of *ACTB* (computing a Ct ratio), for each patient. Again, this ratio is inversely proportional to the expression. These calculations were performed off the script and are our starting point for this last section. 
+
+We load the data (which are gathered in [Supplementary Table 2](https://www.sciencedirect.com/science/article/pii/S0198885922001331?via%3Dihub#s0075)) with:
+
+```{r}
+NFKBIZ_expression <- read_excel("NFKBIZ_expression.xlsx")
+```
+
+We want to study the differences in expression as a function of the groups previously determined in the genetic association study:
+
+```{r}
+NFKBIZ_expression <- NFKBIZ_expression %>% 
+  mutate(GENOTYPE = ifelse(GENOTYPE=="II", "II", "ID+DD")) %>% 
+  mutate_if(is.character, as.factor)
+```
+
+We can visually represent the data with a box plot:
+
+```{r}
+p <- NFKBIZ_expression %>% 
+  ggplot(aes(x=fct_rev(GENOTYPE), y=CT_RATIO, fill=GENOTYPE)) +
+  geom_boxplot() +
+  theme_bw() +
+  ylab("NFKBIZ/ACTB Ct ratio") +
+  scale_fill_manual(values=c("#f8e5f8", "#e699e0")) +
+  theme(
+    legend.position="none",
+    axis.title.y = element_text(face="bold", size=16, margin=margin(r=20)),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(face="bold", size=14),
+    axis.text.y = element_text(face="bold", size=14),
+    strip.text.x = element_text(face="bold"))
+
+ggplotly(p) %>% config(displayModeBar = FALSE)
+```
+
+A necessary step before performing the t-test is checking for the normality of the expression data (independence, random sampling conditions are met), which was done executing a Shapiro-Wilk test:
+
+```{r}
+shapiro.test(NFKBIZ_expression$CT_RATIO)
+```
+
+Accepting the normal distribution (null hypothesis; p > `r SIG_LVL`). The homogeneity of variances was tested with an F-test: 
+
+```{r}
+var.test(NFKBIZ_expression$CT_RATIO ~ NFKBIZ_expression$GENOTYPE)
+```
+
+Which would lead to accepting the null hypothesis of equal variances, but with a rather inconclusive p-value.
+
+The t-test with equal variances was:
+
+```{r}
+t.test(NFKBIZ_expression$CT_RATIO ~ NFKBIZ_expression$GENOTYPE, var.equal=TRUE)  # Significant
+```
+
+And the t-test with no assumption of variance equality was:
+
+```{r}
+t.test(NFKBIZ_expression$CT_RATIO ~ NFKBIZ_expression$GENOTYPE) # Defaults to Welch's approximation
+```
+
+Both results do not give an unanimous statement, being around the significance level of `r SIG_LVL`. We chose to declare non-significance in favor of being conservative, but a statistical trend is seen nevertheless. This trend refers to a higher mean of the Ct *NFKBIZ*/*ACTB* ratio in patients with the *NFKBIZ* rs3217713 II genotype, thus suggesting a lower expression of *NFKBIZ* in this group and indicating a possible functional role for the variant.
+
+# Session info {-}
+
+```{r}
+sessionInfo()
+```
+
+<br>
+
+![](images/logo.webp)

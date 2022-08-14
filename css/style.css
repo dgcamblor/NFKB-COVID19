@@ -1,0 +1,82 @@
+.list-group-item:hover {
+    background-color: #FFEAE9;
+}
+
+.list-group-item.active, .list-group-item.active:focus, .list-group-item.active:hover {
+    background-color: IndianRed;
+}
+
+.tab-content {
+  border-bottom: 1px solid #dddddd;
+  border-left: 1px solid #dddddd;
+  border-right: 1px solid #dddddd;
+  padding: 1rem;
+  border-bottom-left-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+
+.scroll-back {
+  text-align: center;
+}
+
+h1, h2, h3 {
+  margin-top: 30px;
+  margin-bottom: 15px;
+}
+
+h1 {
+  font-variant: small-caps;
+  border-bottom: 1.5px solid #808080;
+}
+
+h2 {
+  font-variant: small-caps;
+  font-size: 28px;
+}
+
+h1.title {
+  font-variant: small-caps;
+  font-size: 38px;
+  color: Black;
+  text-align: center;
+  border-bottom: None;
+}
+
+h1.toc-ignore {
+  border-bottom: None;
+}
+
+h3.subtitle {
+  font-variant: small-caps;
+  font-size: 34px;
+  text-align: center;
+  margin-top: 20px;
+  margin-bottom: 20px
+}
+
+h4.author {
+  font-size: 28px;
+  color: DarkRed;
+  text-align: center;
+}
+
+p {
+  font-size: 15px;
+  color: Black;
+  text-align: justify;
+  margin-top: 15px;
+  margin-bottom: 15px
+}
+
+details {
+  border: 1px solid #F3DE99;
+  border-radius: 5px;
+  background-color: #FCF7E6;
+  padding: 1rem;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+summary {
+  cursor: pointer;
+}
