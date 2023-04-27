@@ -6,7 +6,7 @@ The code here presented is a slightly cleaner adaptation of the script originall
 
 The main file is `report.Rmd`, the script presented in R Markdown format. It aims at producing the HTML file found in the `gh-pages` branch, named `index.html`. Additionaly, `css/style.css` contains some custom CSS that can be reused to generate reports with the same styling.
 
-To completely reproduce the results, the original data is required, but it is not provided here. As per the data availability statement, "*the data (...) are available from the corresponding author upon reasonable request*".
+To completely reproduce the results, the original data are required, but they are not provided here. As per the data availability statement, "*the data (...) are available from the corresponding author upon reasonable request*".
 
 ## Access to the report
 
